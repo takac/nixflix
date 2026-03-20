@@ -7,7 +7,13 @@
 with lib;
 let
   inherit (config) nixflix;
+  tags = import ./tags.nix {
+    inherit lib pkgs;
+  };
   indexers = import ./indexers.nix {
+    inherit lib pkgs;
+  };
+  indexerProxies = import ./indexerProxies.nix {
     inherit lib pkgs;
   };
   applications = import ./applications.nix {
@@ -47,7 +53,9 @@ let
   defaultApplications = filter (app: app != { }) (map mkDefaultApplication arrServices);
 
   extraConfigOptions = {
+    tags = tags.type;
     indexers = indexers.type;
+    indexerProxies = indexerProxies.type;
     applications = applications.type;
   };
 in
@@ -70,9 +78,20 @@ in
       };
     };
 
+    systemd.services."prowlarr-tags" = mkIf (
+      nixflix.enable
+      && nixflix.prowlarr.enable
+      && nixflix.prowlarr.config.apiKey != null
+      && nixflix.prowlarr.config.tags != [ ]
+    ) (tags.mkService nixflix.prowlarr.config);
+
     systemd.services."prowlarr-indexers" = mkIf (
       nixflix.enable && nixflix.prowlarr.enable && nixflix.prowlarr.config.apiKey != null
     ) (indexers.mkService nixflix.prowlarr.config);
+
+    systemd.services."prowlarr-indexer-proxies" = mkIf (
+      nixflix.enable && nixflix.prowlarr.enable && nixflix.prowlarr.config.apiKey != null
+    ) (indexerProxies.mkService nixflix.prowlarr.config);
 
     systemd.services."prowlarr-applications" = mkIf (
       nixflix.enable && nixflix.prowlarr.enable && nixflix.prowlarr.config.apiKey != null

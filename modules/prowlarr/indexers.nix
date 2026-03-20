@@ -35,6 +35,11 @@ in
             default = 1;
             description = "Application profile ID for the indexer (default: 1)";
           };
+          tags = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "List of tag labels to assign to this indexer. Tags must be defined in prowlarr.config.tags.";
+          };
         };
       }
     );
@@ -61,8 +66,14 @@ in
 
   mkService = serviceConfig: {
     description = "Configure Prowlarr indexers via API";
-    after = [ "prowlarr-config.service" ];
-    requires = [ "prowlarr-config.service" ];
+    after = [
+      "prowlarr-config.service"
+    ]
+    ++ lib.optional (serviceConfig.tags != [ ]) "prowlarr-tags.service";
+    requires = [
+      "prowlarr-config.service"
+    ]
+    ++ lib.optional (serviceConfig.tags != [ ]) "prowlarr-tags.service";
     wantedBy = [ "multi-user.target" ];
 
     serviceConfig = {
@@ -83,6 +94,9 @@ in
           extraArgs = "-S";
         }
       })
+
+      # Read tag mapping
+      TAG_MAPPING=$(cat /run/prowlarr/tags.json 2>/dev/null || echo '{}')
 
       # Fetch existing indexers
       echo "Fetching existing indexers..."
@@ -127,6 +141,7 @@ in
             "apiKey"
             "username"
             "password"
+            "tags"
           ];
           fieldOverrides = lib.filterAttrs (
             name: value: value != null && !lib.hasPrefix "_" name
@@ -138,6 +153,7 @@ in
             username = if username == null then "" else username;
             password = if password == null then "" else password;
           };
+          tagNamesJson = builtins.toJSON indexerConfig.tags;
         in
         ''
           echo "Processing indexer: ${indexerName}"
@@ -170,6 +186,9 @@ in
 
           FIELD_OVERRIDES=${escapeShellArg fieldOverridesJson}
 
+          # Resolve tags
+          RESOLVED_TAGS=$(echo "$TAG_MAPPING" | ${pkgs.jq}/bin/jq --argjson names '${tagNamesJson}' '[$names[] as $n | .[$n] // empty]')
+
           EXISTING_INDEXER=$(echo "$INDEXERS" | ${pkgs.jq}/bin/jq -r --arg name ${escapeShellArg indexerName} '.[] | select(.name == $name) | @json' || echo "")
 
           if [ -n "$EXISTING_INDEXER" ]; then
@@ -177,6 +196,7 @@ in
             INDEXER_ID=$(echo "$EXISTING_INDEXER" | ${pkgs.jq}/bin/jq -r '.id')
 
             UPDATED_INDEXER=$(apply_field_overrides "$EXISTING_INDEXER" "$FIELD_OVERRIDES")
+            UPDATED_INDEXER=$(echo "$UPDATED_INDEXER" | ${pkgs.jq}/bin/jq --argjson tags "$RESOLVED_TAGS" '.tags = $tags')
 
             ${
               mkSecureCurl serviceConfig.apiKey {
@@ -202,6 +222,7 @@ in
             fi
 
             NEW_INDEXER=$(apply_field_overrides "$SCHEMA" "$FIELD_OVERRIDES")
+            NEW_INDEXER=$(echo "$NEW_INDEXER" | ${pkgs.jq}/bin/jq --argjson tags "$RESOLVED_TAGS" '.tags = $tags')
 
             ${
               mkSecureCurl serviceConfig.apiKey {
